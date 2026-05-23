@@ -24,9 +24,6 @@ Lane tracking nonlinear model (with ego-motion compensation):
 
   Measurement: h(x) = C0  →  H_jac = [1, 0, 0, 0]
 
-References:
-  Gelb (1974). Applied Optimal Estimation. MIT Press.
-  Julier & Uhlmann (1997). "A New Extension of the Kalman Filter..."
 """
 
 import numpy as np

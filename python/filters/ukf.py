@@ -42,8 +42,8 @@ class UnscentedKalmanFilter(BaseFilter):
     Caller supplies:
         ukf.f_func  — nonlinear state transition  f(x, u, dt) -> x_new  [n]
         ukf.h_func  — nonlinear measurement fn    h(x)        -> z_pred  [m]
-        ukf.Q       — process noise covariance    [n×n]
-        ukf.R       — measurement noise covariance [m×m]
+        ukf.Q       — process noise covariance    [nxn]
+        ukf.R       — measurement noise covariance [mxm]
     """
 
     def __init__(

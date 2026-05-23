@@ -3,13 +3,13 @@
 Implementations of **KF**, **EKF**, and **UKF** built entirely from scratch — no `filterpy`, no `pykalman`.  
 Applied to **camera-based lane marker estimation** (C0 lateral offset, left + right) on a German Autobahn highway transition scenario.
 
-Later phase: C implementation using hand-rolled matrix utilities.
+Later phase: C implementation using hand-written matrix utilities.
 
 ---
 
 ## Why This Exists
 
-Most tutorials either use high-level filter libraries (hiding the math) or toy examples (hiding the engineering).  
+Most tutorials/projects either use high-level filter libraries (hiding the math) or examples (hiding the engineering).  
 This repo shows the full chain: **math → code → real-world sensor model → comparison**.
 
 ---
@@ -96,18 +96,7 @@ kalman-filters/
 │       ├── lane_estimation_kf.py
 │       ├── lane_estimation_ekf.py
 │       ├── lane_estimation_ukf.py
-│       └── compare_filters.py      # ← start here
-├── c/                        # Phase 2 (coming)
-│   ├── include/
-│   │   ├── matrix.h
-│   │   ├── kf.h
-│   │   ├── ekf.h
-│   │   └── ukf.h
-│   └── src/
-│       ├── matrix.c          # All linear algebra utilities
-│       ├── kf.c
-│       ├── ekf.c
-│       └── ukf.c
+│       └── compare_filters.py      # start here
 └── docs/
     └── theory.md             # Derivations and tuning notes
 ```
@@ -117,7 +106,6 @@ kalman-filters/
 ## Quick Start
 
 ```bash
-pip install -r requirements.txt
 cd python/examples
 python compare_filters.py
 ```
@@ -154,8 +142,4 @@ Higher R → trusts model more (smooth but laggy).
 
 ## Coming: C Implementation
 
-Phase 2 adds a C port using hand-rolled matrix operations in `matrix.c`:
-- `mat_mul`, `mat_add`, `mat_transpose`, `mat_inv` (via LU decomposition)
-- Same filter algorithms, stack-allocated fixed-size matrices
-- No heap allocation in the hot path
-- Makefile + unit tests
+Phase 2 adds a C port using hand-rolled matrix operations in `matrix.c`

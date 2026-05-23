@@ -55,8 +55,8 @@ SIGMA_CAMERA  = 0.05   # m   — camera C0 detection noise
 
 
 # Tuned values for KF (for C0) -> NIS 0.986 and RMSE 0.07 and MAE 0.03
-#SIGMA_PROCESS = (0.07, 0.004, 4e-5, 8e-7)
-#SIGMA_CAMERA  = 0.1  
+SIGMA_PROCESS = (0.07, 0.004, 4e-5, 8e-7)
+SIGMA_CAMERA  = 0.1  
 
 # ==============================================================
 # 3. Run filters
