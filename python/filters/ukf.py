@@ -22,12 +22,6 @@ Weights:
   Wᶜ⁰  = λ/(n+λ) + (1 - α² + β)
   Wₘⁱ  = Wᶜⁱ = 1/(2(n+λ))    for i=1…2n
 
-References:
-  Wan & Van der Merwe (2000). "The Unscented Kalman Filter for
-  Nonlinear Estimation."  IEEE ASSPCC.
-
-  Julier & Uhlmann (1997). "A New Extension of the Kalman Filter
-  to Nonlinear Systems." SPIE 3068.
 """
 
 import numpy as np
@@ -51,7 +45,7 @@ class UnscentedKalmanFilter(BaseFilter):
         state_dim: int,
         obs_dim: int,
         alpha: float = 1e-3,
-        beta: float = 2.0,
+        beta: float = 2.0, 
         kappa: float = 0.0,
     ):
         """
@@ -68,7 +62,7 @@ class UnscentedKalmanFilter(BaseFilter):
         self.beta  = beta
         self.kappa = kappa
 
-        # Compute lambda and weights once
+        # Compute lambda and weights once λ = α²(n + κ) - n
         self._lambda = alpha ** 2 * (state_dim + kappa) - state_dim
         self._compute_weights()
 
@@ -85,10 +79,14 @@ class UnscentedKalmanFilter(BaseFilter):
         lam    = self._lambda
 
         # 2n+1 weights for mean and covariance
-        self.Wm = np.full(2 * n + 1, 1.0 / (2.0 * (n + lam)))
+        #  Wₘⁱ  = Wᶜⁱ = 1/(2(n+λ))    for i=1…2n
+        self.Wm = np.full(2 * n + 1, 1.0 / (2.0 * (n + lam))) # ID array of size 2n+1 with value as 1/2(n+lam)
         self.Wc = np.full(2 * n + 1, 1.0 / (2.0 * (n + lam)))
 
+        # overwrite Wm and Wc for zeroth index
+        # Wₘ⁰  = λ/(n+λ)
         self.Wm[0] = lam / (n + lam)
+        # Wᶜ⁰  = λ/(n+λ) + (1 - α² + β)
         self.Wc[0] = lam / (n + lam) + (1.0 - self.alpha ** 2 + self.beta)
 
     # ------------------------------------------------------------------
@@ -102,7 +100,7 @@ class UnscentedKalmanFilter(BaseFilter):
         Uses Cholesky decomposition of (n+λ)·P for numerical stability.
 
         Returns:
-            X: sigma-point matrix  [2n+1 × n]
+            X: sigma-point matrix  [2n+1 x n]
         """
         n   = self.n
         lam = self._lambda
@@ -142,6 +140,7 @@ class UnscentedKalmanFilter(BaseFilter):
         Returns:
             x_prior [n]
         """
+        # Phase 1: Prediction (Time Update)
         X = self._sigma_points(self.x, self.P)
 
         # Propagate all sigma points through the nonlinear function
@@ -182,6 +181,7 @@ class UnscentedKalmanFilter(BaseFilter):
         Returns:
             x_post [n]
         """
+        # Phase 2: Update (Measurement Correction)
         z = np.atleast_1d(z)
         n_sigma = 2 * self.n + 1
 
@@ -199,9 +199,11 @@ class UnscentedKalmanFilter(BaseFilter):
         dx = self._X_pred - self.x
         Pxz = np.einsum('i,ij,ik->jk', self.Wc, dx, dz)
 
-        # Kalman gain
+        # Kalman gain K = Pxz. Inv(S)
         self.K = Pxz @ np.linalg.inv(self.S)
 
+
+        # Phase 3: Final State & Covariance update
         # Innovation
         self.innovation = z - z_bar
 

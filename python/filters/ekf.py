@@ -37,11 +37,11 @@ class ExtendedKalmanFilter(BaseFilter):
 
     The caller supplies:
         ekf.f_func     — state transition  f(x, u, dt) -> x_new   [n]
-        ekf.F_jac_func — its Jacobian      F_jac(x, u, dt) -> [n×n]
+        ekf.F_jac_func — its Jacobian      F_jac(x, u, dt) -> [nxn]
         ekf.h_func     — measurement fn    h(x)    -> z_pred       [m]
-        ekf.H_jac_func — its Jacobian      H_jac(x) -> [m×n]
-        ekf.Q          — process noise covariance                  [n×n]
-        ekf.R          — measurement noise covariance              [m×m]
+        ekf.H_jac_func — its Jacobian      H_jac(x) -> [mxn]
+        ekf.Q          — process noise covariance                  [nxn]
+        ekf.R          — measurement noise covariance              [mxm]
 
     Use build_lane_filter() for the lane-marker application.
     """
@@ -80,8 +80,8 @@ class ExtendedKalmanFilter(BaseFilter):
         # Jacobian at current (just-updated) estimate
         F = self.F_jac_func(self.x, u, dt)
 
-        # Propagate covariance through linearisation
-        self.P = F @ self.P @ F.T + self.Q
+        # Propagate covariance through linearisation -> F.P.Ft + Q
+        self.P = F @ self.P @ F.T + self.Q  
 
         return self.x.copy()
 
@@ -115,18 +115,20 @@ class ExtendedKalmanFilter(BaseFilter):
         # Innovation
         self.innovation = z - z_pred
 
-        # Innovation covariance
+        # Innovation covariance ->S=  H.P.Ht + R (meas. Noise)
         PHt = self.P @ H.T
         self.S = H @ PHt + self.R
 
-        # Kalman gain
+        # Kalman gain K = P.H.Inv(S)
         self.K = PHt @ np.linalg.inv(self.S)
 
-        # State update
+        # State update S = x + K.Inv
         self.x = self.x + self.K @ self.innovation
 
         # Covariance update — Joseph form
-        I_KH = np.eye(self.n) - self.K @ H
+        # Simplified form P = (I-K.H).P -> efficint but only valid for optimal K and Numerical senstive
+        # Jacob form P = (I-K.H).P.(I-K.H)t + K.R.Kt
+        I_KH = np.eye(self.n) - self.K @ H    # (I-HK)
         self.P = I_KH @ self.P @ I_KH.T + self.K @ self.R @ self.K.T
 
         return self.x.copy()
@@ -165,14 +167,26 @@ class ExtendedKalmanFilter(BaseFilter):
             return np.array([C0_new, C1_new, C2_new, C3_new])
 
         # --- Jacobian of f w.r.t. x ---------------------------------------
+        #  f₁ = C0_new = C0 - v·dt·sin(C1)      
+        #  f₂ = C1_new = C1 + C2·v·dt - ω·dt
+        #  f₃ = C2_new = C2 + C3·v·dt
+        #  f₄ = C3_new = C3
+
+        # F_jac is partial derivate of Fi wrt C0, C1, C2, C3 for row i
+        # ∂f₁/∂C0, ∂f₁/∂C1, ∂f₁/∂C2, ∂f₁/∂C3
+        # ∂f₂/∂C0, ∂f₂/∂C1, ∂f₂/∂C2, ∂f₂/∂C3
+        # ∂f₃/∂C0, ∂f₃/∂C1, ∂f₃/∂C2, ∂f₃/∂C3
+        # ∂f₄/∂C0, ∂f₄/∂C1, ∂f₄/∂C2, ∂f₄/∂C3
+
+
         def F_jac(x: np.ndarray, u: np.ndarray, dt: float) -> np.ndarray:
             C0, C1, C2, C3 = x
             v, omega = u
             return np.array([
-                [1.0, -v * dt * np.cos(C1), 0.0,      0.0    ],
-                [0.0,       1.0,            v * dt,   0.0    ],
-                [0.0,       0.0,            1.0,      v * dt ],
-                [0.0,       0.0,            0.0,      1.0    ],
+                [1.0, -v * dt * np.cos(C1), 0.0,      0.0    ],   
+                [0.0,       1.0,            v * dt,   0.0    ],  
+                [0.0,       0.0,            1.0,      v * dt ],  
+                [0.0,       0.0,            0.0,      1.0    ],  
             ])
 
         # --- Linear measurement model (camera sees C0 only) ---------------

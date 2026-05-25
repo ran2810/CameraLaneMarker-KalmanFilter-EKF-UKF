@@ -91,6 +91,8 @@ class KalmanFilter(BaseFilter):
         self.x = self.x + self.K @ self.innovation
 
         # Covariance update — Joseph form for numerical stability
+        # Simplified form P = (I-K.H).P -> efficint but only valid for optimal K and Numerical senstive
+        # Jacob form P = (I-K.H).P.(I-K.H)t + K.R.Kt -> computational cost but numerical stable and valid for any value of K 
         I_KH = np.eye(self.n) - self.K @ self.H   # (I - K.H)
         self.P = I_KH @ self.P @ I_KH.T + self.K @ self.R @ self.K.T
 
