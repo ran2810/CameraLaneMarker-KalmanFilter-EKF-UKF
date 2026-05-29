@@ -46,7 +46,6 @@ from scipy.interpolate import interp1d
 
 import os as _os
 
-
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in _sys.path:
     _sys.path.insert(0, str(_PROJECT_ROOT))
@@ -63,18 +62,43 @@ _WGS84_TO_WEBM  = Transformer.from_crs("EPSG:4326", "EPSG:3857",  always_xy=True
 _KML_NS = {"k": "http://www.opengis.net/kml/2.2"}
 
 
-#  road geometry constants  Munich standard) 
-LANE_WIDTH_URBAN    = 3.25   # m  — standard Munich urban lane
-LANE_WIDTH_ARTERIAL = 3.50   # m  — larger arterial / Bundesstrasse
-SPEED_DEFAULT_KMH   = 50.0   # km/h
-SPEED_CURVE_KMH     = 20.0   # km/h on κ > KAPPA_SLOW
-KAPPA_SLOW          = 0.05   # 1/m — threshold to slow down (~R<20m)
+# #  road geometry constants  Munich standard) - urban 
+# LANE_WIDTH_URBAN    = 3.25   # m  — standard Munich urban lane
+# LANE_WIDTH_ARTERIAL = 3.50   # m  — larger arterial / Bundesstrasse
+# SPEED_DEFAULT_KMH   = 50.0   # km/h
+# SPEED_CURVE_KMH     = 20.0   # km/h on κ > KAPPA_SLOW
+# KAPPA_SLOW          = 0.05   # 1/m — threshold to slow down (~R<20m)
 
-#  lane change / manoeuvre detection 
-KAPPA_MANOEUVRE     = 0.030  # 1/m — |κ| threshold for a manoeuvre
-MIN_MANOEUVRE_M     = 5.0    # minimum arc-length (m) to count as a manoeuvre
-STEERING_TAU        = 0.35   # s  — heading-error first-order time constant
-C1_PEAK_MANOEUVRE   = 0.12   # rad — peak heading error during a manoeuvre
+# Auto-detected from curvature profile; overridable per call.
+LANE_WIDTH_HIGHWAY  = 3.75   # m  — Autobahn/motorway (StVO/RAA standard)
+LANE_WIDTH_RAMP     = 3.50   # m  — on/off ramp, motorway_link
+LANE_WIDTH_URBAN    = 3.25   # m  — urban / city roads
+LANE_WIDTH_ARTERIAL = 3.50   # m  — arterial / Bundesstrasse
+
+# Speed profiles (km/h)
+SPEED_HIGHWAY_KMH   = 120.0  # motorway cruise
+SPEED_RAMP_KMH      =  80.0  # on/off ramp
+SPEED_URBAN_KMH     =  40.0  # urban default
+SPEED_CURVE_KMH     =  60.0  # slows on κ > KAPPA_SLOW (ramps)
+KAPPA_SLOW          = 0.008  # 1/m — start slowing (~R < 125m)
+
+#  manoeuvre detection 
+# Highway: only ramp curves (κ > 0.008 1/m, R < 125m) qualify.
+# Urban:   tighter turns from 0.030 1/m.
+# Auto-selected based on route type detection.
+KAPPA_MANOEUVRE_HIGHWAY = 0.008  # 1/m — ramp / interchange curve
+KAPPA_MANOEUVRE_URBAN   = 0.030  # 1/m — urban turn
+KAPPA_MANOEUVRE         = 0.008  # default (overridden by route_type)
+MIN_MANOEUVRE_M         = 30.0   # highway ramps are longer than urban turns
+STEERING_TAU            = 0.40   # s  — highway steering response (slower)
+C1_PEAK_MANOEUVRE       = 0.06   # rad — highway lane change (shallower than urban)
+
+
+# #  lane change / manoeuvre detection  - urban 
+# KAPPA_MANOEUVRE     = 0.030  # 1/m — |κ| threshold for a manoeuvre
+# MIN_MANOEUVRE_M     = 5.0    # minimum arc-length (m) to count as a manoeuvre
+# STEERING_TAU        = 0.35   # s  — heading-error first-order time constant
+# C1_PEAK_MANOEUVRE   = 0.12   # rad — peak heading error during a manoeuvre
 
 _CSV_HEADER = (
     "t,speed,yaw_rate,"
@@ -391,10 +415,10 @@ def _build_c1_profile(T: int,
 # Speed profile
 # =========================================================================
 def _speed_profile(kappa: np.ndarray,
-                   v_default: float = SPEED_DEFAULT_KMH / 3.6,
-                   v_curve:   float = SPEED_CURVE_KMH   / 3.6,
+                   v_default: float = SPEED_HIGHWAY_KMH / 3.6,
+                   v_curve:   float = SPEED_RAMP_KMH   / 3.6,
                    kappa_slow: float = KAPPA_SLOW,
-                   smooth_sigma: float = 10.0,
+                   smooth_sigma: float = 15.0,
                    ) -> np.ndarray:
     """Variable speed: slow on tight curves, fast on straights."""
     v = np.where(np.abs(kappa) > kappa_slow, v_curve, v_default)
@@ -421,8 +445,13 @@ def generate_kml_lane_data(
 
     Returns a LaneDataset (same schema as generate_lane_data.py) plus extra
     geometry attributes for Bokeh visualisation and a list of Manoeuvre events.
-    """
-    from python.data.generate_lane_data import LaneDataset
+  """
+    # LaneDataset is defined locally so this script works standalone
+    # (no dependency on the project package layout at runtime).
+    try:
+        from python.data.generate_lane_data import LaneDataset
+    except ImportError:
+        LaneDataset = _LaneDataset  # fall back to inline definition
 
     rng  = np.random.default_rng(seed)
     path = Path(kml_path)
@@ -433,7 +462,8 @@ def generate_kml_lane_data(
 
     # Project + clean 
     coords_utm = _to_utm(route.coords_ll)
-    coords_utm = _clean_coords(coords_utm)
+    # Remove GPS noise clusters (nodes < 1.5m apart create spurious curvature)
+    coords_utm = _clean_coords(coords_utm, min_step_m=1.5, max_step_m=500.0)
     print(f"After clean: {len(coords_utm)} nodes")
 
     # Spline 
@@ -441,12 +471,53 @@ def generate_kml_lane_data(
     total_s = s_knots[-1]
     print(f"Route length: {total_s/1000:.2f} km")
 
-    #  Re-sample at camera rate via time integration 
+    # Auto-detect route type from curvature statistics 
+    # Build a separate heavily-smoothed spline (σ=5 nodes) solely for
+    # classification — suppresses GPS noise that would inflate κ estimates.
+    _cs_e_hvy, _cs_n_hvy, _s_hvy = _build_spline(coords_utm, smooth_sigma=5.0)
+    _s_det = np.linspace(0, _s_hvy[-1], 500)
+    _, _, _, _kappa_hvy, _ = _geometry(_cs_e_hvy, _cs_n_hvy, _s_det,
+                                        smooth_sigma=5.0)
+    _kappa_p75 = float(np.percentile(np.abs(_kappa_hvy), 75))
+    _kappa_p90 = float(np.percentile(np.abs(_kappa_hvy), 90))
+    _kappa_max = float(np.abs(_kappa_hvy).max())
+    # Highway: 75th-pct κ < 0.005 (motorway + ramps still mostly straight)
+    # Urban:   75th-pct κ > 0.005 (frequent turns dominate even percentiles)
+    _is_highway = _kappa_p75 < 0.005
+
+    if _is_highway:
+        _lw_default   = lane_width if lane_width != LANE_WIDTH_URBAN else LANE_WIDTH_HIGHWAY
+        _kappa_man    = KAPPA_MANOEUVRE_HIGHWAY
+        _min_man_m    = MIN_MANOEUVRE_M          # 30m minimum arc
+        _v_default    = SPEED_HIGHWAY_KMH / 3.6
+        _v_curve      = SPEED_RAMP_KMH    / 3.6
+        _kappa_slow   = KAPPA_SLOW               # 0.008
+        _c1_peak      = C1_PEAK_MANOEUVRE        # 0.06 rad
+        _tau          = STEERING_TAU             # 0.40s
+        route_type    = "highway"
+    else:
+        _lw_default   = lane_width
+        _kappa_man    = KAPPA_MANOEUVRE_URBAN
+        _min_man_m    = 5.0
+        _v_default    = SPEED_URBAN_KMH   / 3.6
+        _v_curve      = SPEED_CURVE_KMH   / 3.6
+        _kappa_slow   = 0.05
+        _c1_peak      = 0.12
+        _tau          = 0.35
+        route_type    = "urban"
+
+    print(f"Route type: {route_type}  "
+          f"(κ_p75={_kappa_p75:.4f} 1/m  κ_p90={_kappa_p90:.4f} 1/m  "
+          f"κ_max={_kappa_max:.4f} 1/m)")
+
+    # Re-sample at camera rate via time integration 
     # Rough speed profile on knot grid for time integration
     e_k, n_k, psi_k, kappa_k, _ = _geometry(cs_e, cs_n, s_knots, smooth_sigma=smooth_sigma)
-    v_knots = _speed_profile(kappa_k)
-
-
+    v_knots = _speed_profile(kappa_k,
+                             v_default=_v_default,
+                             v_curve=_v_curve,
+                             kappa_slow=_kappa_slow)
+    
     v_fn = interp1d(s_knots, v_knots, kind="linear", fill_value="extrapolate")
 
     s_arr = [0.0]; t_arr = [0.0]
@@ -473,7 +544,7 @@ def generate_kml_lane_data(
     yaw_rate += rng.normal(0, 5e-4, T)
 
     # Lane markers (perpendicular offset) 
-    hw = lane_width / 2.0
+    hw = _lw_default / 2.0
     psi_perp = psi + np.pi / 2.0
     nx = np.cos(psi_perp); ny = np.sin(psi_perp)
 
@@ -481,7 +552,9 @@ def generate_kml_lane_data(
     e_R = e_ctr - hw * nx;  n_R = n_ctr - hw * ny
 
     # Detect manoeuvres 
-    manoeuvres = detect_manoeuvres(s_eval, kappa, kappa_threshold)
+    manoeuvres = detect_manoeuvres(s_eval, kappa,
+                                    kappa_threshold=_kappa_man,
+                                    min_arc_m=_min_man_m)
     print(f"Detected manoeuvres: {len(manoeuvres)}")
     for m in manoeuvres:
         print(f"  t={t_eval[m.idx_start]:.1f}–{t_eval[m.idx_end]:.1f}s  "
